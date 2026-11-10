@@ -25,6 +25,7 @@ from conversational_agent.support import (
     SupportScenarioLLM,
     support_tools,
 )
+from conversational_agent.workflow import WorkflowRegistry, WorkflowSelector
 
 __all__ = [
     'Conversation',
@@ -45,5 +46,7 @@ __all__ = [
     'TurnRequest',
     'TurnStatus',
     'ValidationError',
+    'WorkflowRegistry',
+    'WorkflowSelector',
     'support_tools',
 ]

@@ -1,0 +1,19 @@
+{
+  "id": "order_status",
+  "version": 2,
+  "entry_intents": ["order_status"],
+  "entry_keywords": ["where is my order", "tracking", "배송", "주문 상태"],
+  "slots": {
+    "order_id": {"type": "string", "pattern": "^\\d{5}$"}
+  },
+  "states": {
+    "need_order": {
+      "allowed_tools": ["lookup_order"],
+      "transitions": [{"when": "order_id_present", "to": "answer_status"}]
+    },
+    "answer_status": {
+      "allowed_tools": [],
+      "transitions": []
+    }
+  }
+}

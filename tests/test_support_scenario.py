@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from conversational_agent import (
     ConversationEngine,
     FakeAttachmentGuard,
     FakeOrderRepository,
     FakeRAGProvider,
     SupportScenarioLLM,
+    WorkflowRegistry,
     support_tools,
 )
 from conversational_agent.frontends.text import TextFrontend
@@ -28,10 +31,13 @@ def test_realistic_damage_support_scenario() -> None:
         ],
     )
     llm = SupportScenarioLLM()
+    workflows = WorkflowRegistry()
+    workflows.load_directory(Path(__file__).resolve().parents[1] / "workflows")
     engine = ConversationEngine(
         providers=[provider],
         llm=llm,
         tools=support_tools(repository, guard),
+        workflows=workflows,
         max_steps=6,
     )
     text = TextFrontend(engine)
@@ -43,6 +49,7 @@ def test_realistic_damage_support_scenario() -> None:
         metadata={"customer_id": "customer-1", "provider_id": "support-policy"},
     ))
     assert any(event["type"] == "rag.call" for event in events1)
+    assert any(event["type"] == "workflow.selected" for event in events1)
     assert "주문번호" in final_text(events1)
 
     # 2) Order DB lookup, then ask which item.

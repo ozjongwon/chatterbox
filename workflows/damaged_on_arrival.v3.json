@@ -1,0 +1,34 @@
+{
+  "id": "damaged_on_arrival",
+  "version": 3,
+  "entry_intents": ["damaged_on_arrival"],
+  "entry_keywords": ["broken", "damaged", "파손", "깨져", "arrived broken"],
+  "slots": {
+    "order_id": {"type": "string", "pattern": "^\\d{5}$"},
+    "item_id": {"type": "string"},
+    "photo_verified": {"type": "boolean"},
+    "policy_evidence_id": {"type": "string"}
+  },
+  "states": {
+    "need_order": {
+      "allowed_tools": ["retrieve_policy", "lookup_order"],
+      "transitions": [{"when": "order_id_present", "to": "need_item"}]
+    },
+    "need_item": {
+      "allowed_tools": ["lookup_order", "lookup_order_item"],
+      "transitions": [{"when": "item_id_present", "to": "need_photo"}]
+    },
+    "need_photo": {
+      "allowed_tools": ["lookup_order_item", "validate_attachment"],
+      "transitions": [{"when": "photo_verified", "to": "policy_check"}]
+    },
+    "policy_check": {
+      "allowed_tools": ["retrieve_policy"],
+      "transitions": [{"when": "policy_evidence_id_present", "to": "ready_for_decision"}]
+    },
+    "ready_for_decision": {
+      "allowed_tools": [],
+      "transitions": []
+    }
+  }
+}

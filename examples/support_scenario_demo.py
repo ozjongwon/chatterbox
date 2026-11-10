@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from conversational_agent import (
     ConversationEngine,
     FakeAttachmentGuard,
     FakeOrderRepository,
     FakeRAGProvider,
     SupportScenarioLLM,
+    WorkflowRegistry,
     support_tools,
 )
 from conversational_agent.frontends.text import TextFrontend
@@ -25,10 +28,15 @@ def main() -> None:
             }
         ],
     )
+    workflows = WorkflowRegistry()
+    workflows.load_directory(
+        Path(__file__).resolve().parents[1] / "workflows"
+    )
     engine = ConversationEngine(
         providers=[provider],
         llm=SupportScenarioLLM(),
         tools=support_tools(FakeOrderRepository(), FakeAttachmentGuard()),
+        workflows=workflows,
         max_steps=6,
     )
     text = TextFrontend(engine)
@@ -70,7 +78,14 @@ def main() -> None:
         ))
         print(f"\n{number}. USER: {message}")
         for event in events:
-            if event["type"] == "rag.call":
+            if event["type"] == "workflow.selected":
+                print(
+                    "   FLOW:",
+                    event["workflow_id"],
+                    f"v{event['workflow_version']}",
+                    event["workflow_state"],
+                )
+            elif event["type"] == "rag.call":
                 print(
                     "   RAG :",
                     event["provider_id"],

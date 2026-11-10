@@ -22,6 +22,7 @@ from conversational_agent.core.models import (
 )
 from conversational_agent.providers import validate_providers
 from conversational_agent.storage import ConversationStore, InMemoryConversationStore
+from conversational_agent.workflow import WorkflowRegistry, WorkflowSelector
 
 
 class _CancelledError(Exception):
@@ -44,6 +45,7 @@ _SAFE_ERROR_MESSAGES = {
     'INTERNAL_ERROR': 'An unexpected error occurred while processing the request.',
     'MAX_TOOL_CALLS_EXCEEDED': 'The tool-call budget for this turn was exhausted.',
     'TOOL_FAILURE': 'A requested service could not complete the operation.',
+    'ACTION_NOT_ALLOWED': 'This action is not allowed in the current workflow state.',
 }
 
 
@@ -103,6 +105,8 @@ class ConversationEngine:
         tools: Mapping[str, Callable[..., Any]] | None = None,
         max_tool_calls: int = 4,
         tool_timeout: float = 2.0,
+        workflows: WorkflowRegistry | None = None,
+        workflow_selector: WorkflowSelector | None = None,
     ) -> None:
         self._providers = validate_providers(providers)
         self._llm = llm
@@ -118,6 +122,10 @@ class ConversationEngine:
         self._tools = dict(tools or {})
         self._max_tool_calls = max(0, max_tool_calls)
         self._tool_timeout = tool_timeout
+        self._workflows = workflows
+        self._workflow_selector = workflow_selector or (
+            WorkflowSelector(workflows) if workflows is not None else None
+        )
         # A plain (non-reentrant) lock may be released by a different thread
         # than the one that acquired it, which matters because callers may
         # drive the streaming generator from another thread.
@@ -221,6 +229,23 @@ class ConversationEngine:
             self._cache.pin(conversation_id)
 
         try:
+            if (
+                self._workflow_selector is not None
+                and "workflow_id" not in conversation.metadata
+            ):
+                selection_metadata = dict(conversation.metadata)
+                selection_metadata.update(request.metadata)
+                selected = self._workflow_selector.select(selection_metadata, text)
+                if selected is not None:
+                    self._workflow_selector.pin(conversation, selected)
+                    yield {
+                        'type': 'workflow.selected',
+                        'conversation_id': conversation_id,
+                        'workflow_id': selected.workflow_id,
+                        'workflow_version': selected.version,
+                        'workflow_state': selected.initial_state,
+                    }
+
             existing = conversation.find_turn(request.idempotency_key)
             if existing is not None:
                 yield {
@@ -310,6 +335,9 @@ class ConversationEngine:
                         break
 
                     assert isinstance(action, LLMAction)
+                    if not self._workflow_allows(conversation, action):
+                        error_code = 'ACTION_NOT_ALLOWED'
+                        break
                     trace.append(
                         {
                             'type': 'model_action',
@@ -387,6 +415,11 @@ class ConversationEngine:
                         }
                         if not result.get('ok'):
                             degraded = True
+                        else:
+                            self._update_workflow_from_tool(
+                                conversation, tool_name, result
+                            )
+                            self._advance_workflow(conversation)
                         continue
 
                     if rag_calls >= self._max_rag_calls:
@@ -483,6 +516,8 @@ class ConversationEngine:
                             'items': _evidence_payload(results),
                         }
                     )
+                    self._update_workflow_from_rag(conversation, ids)
+                    self._advance_workflow(conversation)
                     yield {
                         'type': 'rag.call',
                         'conversation_id': conversation_id,
@@ -696,7 +731,7 @@ class ConversationEngine:
             'tool_results': tool_results,
             'step': step,
             'frontend': request.frontend.value,
-            'metadata': dict(request.metadata),
+            'metadata': {**dict(conversation.metadata), **dict(request.metadata)},
         }
         last_error: Exception | None = None
         for _ in range(2):
@@ -798,6 +833,72 @@ class ConversationEngine:
                 (conversation_id, turn_id) in self._cancelled
                 or (conversation_id, '*') in self._cancelled
             )
+
+    def _workflow_allows(self, conversation: Conversation, action: LLMAction) -> bool:
+        if self._workflows is None or action.action == 'answer':
+            return True
+        workflow = self._workflows.get(
+            str(conversation.metadata.get('workflow_id') or ''),
+            int(conversation.metadata.get('workflow_version') or 0) or None,
+        )
+        if workflow is None:
+            return True
+        state_name = str(conversation.metadata.get('workflow_state') or '')
+        state = workflow.states.get(state_name) or {}
+        allowed = set(state.get('allowed_tools') or [])
+        if action.action == 'tool':
+            return action.tool_name in allowed
+        if action.action == 'retrieve':
+            return 'retrieve_policy' in allowed
+        return False
+
+    def _update_workflow_from_tool(
+        self,
+        conversation: Conversation,
+        tool_name: str,
+        result: dict[str, Any],
+    ) -> None:
+        slots = dict(conversation.metadata.get('workflow_slots') or {})
+        if tool_name == 'lookup_order':
+            slots['order_id'] = result.get('order', {}).get('order_id')
+        elif tool_name == 'lookup_order_item':
+            slots['item_id'] = result.get('item', {}).get('item_id')
+        elif tool_name == 'validate_attachment':
+            slots['photo_verified'] = bool(result.get('verified'))
+        conversation.metadata['workflow_slots'] = slots
+
+    def _update_workflow_from_rag(
+        self,
+        conversation: Conversation,
+        evidence_ids: list[str],
+    ) -> None:
+        if evidence_ids:
+            slots = dict(conversation.metadata.get('workflow_slots') or {})
+            slots['policy_evidence_id'] = evidence_ids[0]
+            conversation.metadata['workflow_slots'] = slots
+
+    def _advance_workflow(self, conversation: Conversation) -> None:
+        if self._workflows is None:
+            return
+        workflow = self._workflows.get(
+            str(conversation.metadata.get('workflow_id') or ''),
+            int(conversation.metadata.get('workflow_version') or 0) or None,
+        )
+        if workflow is None:
+            return
+        state_name = str(conversation.metadata.get('workflow_state') or '')
+        state = workflow.states.get(state_name) or {}
+        slots = dict(conversation.metadata.get('workflow_slots') or {})
+        truth = {
+            'order_id_present': bool(slots.get('order_id')),
+            'item_id_present': bool(slots.get('item_id')),
+            'photo_verified': bool(slots.get('photo_verified')),
+            'policy_evidence_id_present': bool(slots.get('policy_evidence_id')),
+        }
+        for transition in state.get('transitions', []):
+            if truth.get(str(transition.get('when'))):
+                conversation.metadata['workflow_state'] = transition.get('to')
+                break
 
     # ------------------------------------------------------------------
     # Cache and persistence
