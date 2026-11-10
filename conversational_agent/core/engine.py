@@ -6,7 +6,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -42,6 +42,8 @@ _SAFE_ERROR_MESSAGES = {
     'CONVERSATION_BUSY': 'Another turn for this conversation is still in progress.',
     'CANCELLED': 'The turn was cancelled.',
     'INTERNAL_ERROR': 'An unexpected error occurred while processing the request.',
+    'MAX_TOOL_CALLS_EXCEEDED': 'The tool-call budget for this turn was exhausted.',
+    'TOOL_FAILURE': 'A requested service could not complete the operation.',
 }
 
 
@@ -98,6 +100,9 @@ class ConversationEngine:
         llm_first_token_timeout: float = 5.0,
         total_turn_timeout: float = 30.0,
         history_limit: int = 50,
+        tools: Mapping[str, Callable[..., Any]] | None = None,
+        max_tool_calls: int = 4,
+        tool_timeout: float = 2.0,
     ) -> None:
         self._providers = validate_providers(providers)
         self._llm = llm
@@ -110,6 +115,9 @@ class ConversationEngine:
         self._llm_timeout = llm_first_token_timeout
         self._total_turn_timeout = total_turn_timeout
         self._history_limit = history_limit
+        self._tools = dict(tools or {})
+        self._max_tool_calls = max(0, max_tool_calls)
+        self._tool_timeout = tool_timeout
         # A plain (non-reentrant) lock may be released by a different thread
         # than the one that acquired it, which matters because callers may
         # drive the streaming generator from another thread.
@@ -252,6 +260,8 @@ class ConversationEngine:
             degraded = False
             answer_text: str | None = None
             rag_calls = 0
+            tool_calls = 0
+            tool_results: list[dict[str, Any]] = []
             error_code: str | None = None
             cancelled = False
 
@@ -267,7 +277,7 @@ class ConversationEngine:
                     step_started = time.perf_counter()
                     try:
                         action = self._call_llm(
-                            request, conversation, evidence, step, turn_id
+                            request, conversation, evidence, tool_results, step, turn_id
                         )
                     except _CancelledError:
                         cancelled = True
@@ -315,11 +325,69 @@ class ConversationEngine:
                         'action': action.action,
                         'provider_id': action.provider_id,
                         'query': action.query,
+                        'tool_name': action.tool_name,
+                        'arguments': dict(action.arguments or {}),
                     }
 
                     if action.action == 'answer':
                         answer_text = action.text or ''
                         break
+
+                    if action.action == 'tool':
+                        if tool_calls >= self._max_tool_calls:
+                            error_code = 'MAX_TOOL_CALLS_EXCEEDED'
+                            break
+                        tool_name = action.tool_name or ''
+                        tool = self._tools.get(tool_name)
+                        tool_started = time.perf_counter()
+                        if tool is None:
+                            result: dict[str, Any] = {
+                                'ok': False,
+                                'error_code': 'UNKNOWN_TOOL',
+                                'message': f'Unknown tool: {tool_name}',
+                            }
+                        else:
+                            try:
+                                result = self._call_tool(
+                                    tool,
+                                    dict(action.arguments or {}),
+                                    request,
+                                    tool_calls,
+                                )
+                            except _CancelledError:
+                                cancelled = True
+                                break
+                            except Exception:  # noqa: BLE001 - tool boundary
+                                degraded = True
+                                result = {
+                                    'ok': False,
+                                    'error_code': 'TOOL_FAILURE',
+                                    'message': _SAFE_ERROR_MESSAGES['TOOL_FAILURE'],
+                                }
+                        if not isinstance(result, dict):
+                            result = {'ok': False, 'error_code': 'TOOL_FAILURE',
+                                      'message': _SAFE_ERROR_MESSAGES['TOOL_FAILURE']}
+                        tool_calls += 1
+                        tool_results.append({'tool_name': tool_name, **result})
+                        trace.append({
+                            'type': 'tool_call',
+                            'tool_name': tool_name,
+                            'arguments': dict(action.arguments or {}),
+                            'result': result,
+                            'duration_ms': (time.perf_counter() - tool_started) * 1000.0,
+                            'status': 'ok' if result.get('ok') else 'error',
+                        })
+                        yield {
+                            'type': 'tool.call',
+                            'conversation_id': conversation_id,
+                            'turn_id': turn_id,
+                            'tool_name': tool_name,
+                            'arguments': dict(action.arguments or {}),
+                            'result': result,
+                        }
+                        if not result.get('ok'):
+                            degraded = True
+                        continue
 
                     if rag_calls >= self._max_rag_calls:
                         error_code = 'MAX_RAG_CALLS_EXCEEDED'
@@ -614,6 +682,7 @@ class ConversationEngine:
         request: TurnRequest,
         conversation: Conversation,
         evidence: list[dict[str, Any]],
+        tool_results: list[dict[str, Any]],
         step: int,
         turn_id: str,
     ) -> Any:
@@ -624,6 +693,7 @@ class ConversationEngine:
             'user_text': request.text,
             'history': history,
             'evidence': evidence,
+            'tool_results': tool_results,
             'step': step,
             'frontend': request.frontend.value,
             'metadata': dict(request.metadata),
@@ -676,6 +746,24 @@ class ConversationEngine:
                 last_error = exc
         raise RuntimeError('rag provider failed') from last_error
 
+    def _call_tool(
+        self,
+        tool: Callable[..., Any],
+        args: dict[str, Any],
+        request: TurnRequest,
+        call_index: int,
+    ) -> dict[str, Any]:
+        result = self._call_with_timeout(
+            tool,
+            self._tool_timeout,
+            **args,
+            conversation_id=request.conversation_id,
+            turn_id=f'{request.idempotency_key}:{call_index}',
+            metadata=dict(request.metadata),
+            frontend=request.frontend.value,
+        )
+        return result if isinstance(result, dict) else {'ok': True, 'data': result}
+
     def _call_with_timeout(
         self,
         fn: Callable[..., Any],
@@ -700,6 +788,8 @@ class ConversationEngine:
             return bool(action.provider_id) and bool(
                 action.query and action.query.strip()
             )
+        if action.action == 'tool':
+            return bool(action.tool_name) and isinstance(action.arguments, dict)
         return False
 
     def _is_cancelled(self, conversation_id: str, turn_id: str) -> bool:

@@ -37,6 +37,8 @@ class LLMAction:
     text: str | None = None
     provider_id: str | None = None
     query: str | None = None
+    tool_name: str | None = None
+    arguments: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +46,8 @@ class LLMAction:
             'text': self.text,
             'provider_id': self.provider_id,
             'query': self.query,
+            'tool_name': self.tool_name,
+            'arguments': dict(self.arguments or {}),
         }
 
 

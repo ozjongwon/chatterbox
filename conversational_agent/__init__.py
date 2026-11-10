@@ -19,10 +19,18 @@ from conversational_agent.storage import (
     FunctionConversationStore,
     InMemoryConversationStore,
 )
+from conversational_agent.support import (
+    FakeAttachmentGuard,
+    FakeOrderRepository,
+    SupportScenarioLLM,
+    support_tools,
+)
 
 __all__ = [
     'Conversation',
     'ConversationEngine',
+    'FakeAttachmentGuard',
+    'FakeOrderRepository',
     'FakeRAGProvider',
     'FakeTextLLM',
     'FrontendType',
@@ -32,8 +40,10 @@ __all__ = [
     'LRUCache',
     'ProviderValidationError',
     'RAGProvider',
+    'SupportScenarioLLM',
     'Turn',
     'TurnRequest',
     'TurnStatus',
     'ValidationError',
+    'support_tools',
 ]
