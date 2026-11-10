@@ -13,13 +13,20 @@ from conversational_agent.core.models import (
     TurnStatus,
     ValidationError,
 )
+from conversational_agent.fakes import FakeRAGProvider, FakeTextLLM
 from conversational_agent.providers import ProviderValidationError, RAGProvider
-from conversational_agent.storage import InMemoryConversationStore
+from conversational_agent.storage import (
+    FunctionConversationStore,
+    InMemoryConversationStore,
+)
 
 __all__ = [
     'Conversation',
     'ConversationEngine',
+    'FakeRAGProvider',
+    'FakeTextLLM',
     'FrontendType',
+    'FunctionConversationStore',
     'InMemoryConversationStore',
     'LLMAction',
     'LRUCache',

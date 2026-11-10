@@ -65,6 +65,24 @@ def _evidence_ids(items: Any) -> list[str]:
     return evidence
 
 
+def _evidence_payload(items: Any) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for item in items or []:
+        if isinstance(item, dict):
+            row = dict(item)
+        else:
+            row = {
+                'evidence_id': getattr(item, 'evidence_id', getattr(item, 'id', None)),
+                'text': getattr(item, 'text', getattr(item, 'content', None)),
+            }
+        if row.get('evidence_id') is None:
+            row['evidence_id'] = row.get('id')
+        if row.get('text') is None:
+            row['text'] = row.get('content')
+        payload.append(row)
+    return payload
+
+
 class ConversationEngine:
     """Owns turns, the bounded LLM/RAG loop, cache, and persistence."""
 
@@ -394,6 +412,7 @@ class ConversationEngine:
                             'provider_id': provider.provider_id,
                             'query': action.query,
                             'evidence_ids': ids,
+                            'items': _evidence_payload(results),
                         }
                     )
                     yield {
@@ -606,6 +625,8 @@ class ConversationEngine:
             'history': history,
             'evidence': evidence,
             'step': step,
+            'frontend': request.frontend.value,
+            'metadata': dict(request.metadata),
         }
         last_error: Exception | None = None
         for _ in range(2):

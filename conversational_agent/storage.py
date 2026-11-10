@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import threading
+from collections.abc import Callable
 from typing import Any, Protocol
 
 
@@ -44,3 +45,21 @@ class InMemoryConversationStore:
     def __contains__(self, conversation_id: object) -> bool:
         with self._lock:
             return conversation_id in self._rows
+
+
+class FunctionConversationStore:
+    """Store adapter backed by caller-provided save/load functions."""
+
+    def __init__(
+        self,
+        save_fn: Callable[[dict[str, Any]], None],
+        load_fn: Callable[[str], dict[str, Any] | None],
+    ) -> None:
+        self._save_fn = save_fn
+        self._load_fn = load_fn
+
+    def save(self, snapshot: dict[str, Any]) -> None:
+        self._save_fn(snapshot)
+
+    def load(self, conversation_id: str) -> dict[str, Any] | None:
+        return self._load_fn(conversation_id)

@@ -53,6 +53,7 @@ class VoiceFrontend:
         idempotency_key: str,
         audio: bytes,
         end_of_speech: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> Iterator[CoreEvent]:
         if not end_of_speech:
             return
@@ -87,6 +88,7 @@ class VoiceFrontend:
             idempotency_key=idempotency_key,
             text=text,
             frontend=FrontendType.VOICE,
+            metadata=dict(metadata or {}),
         )
 
         buffer: list[str] = []
