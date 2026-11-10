@@ -1,0 +1,2 @@
+# Test modules are the external contract and are not part of the package lint.
+extend-exclude = ["tests"]

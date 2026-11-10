@@ -1,0 +1,145 @@
+# LoopForge config. Direct OpenAI-compatible HTTP agents; no codex/claude/anti-gravity CLI.
+# Set the env var named by api_key_env before running `loopforge run`.
+
+[api]
+base_url        = "https://api.deepseek.com"     # OpenAI-compatible endpoint
+api_key_env     = "DEEPSEEK_API_KEY"
+timeout         = 300
+thinking_style  = "reasoning_effort"             # "reasoning_effort" | "thinking" | "none"
+
+[budget]
+max_iterations   = 8
+max_cost_usd     = 5.0
+max_calls        = 60
+max_wall_seconds = 3600
+stall_repeat     = 3          # same failure signature N times => escalate once, then halt
+
+# role -> agent
+[roles]
+architect   = "flash_architect"
+tester      = "flash_tester"
+implementer = "flash_nothink"
+critic      = "v4pro_medium"
+escalation  = "v4pro_high"
+
+[agents.flash_architect]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-flash"
+reasoning_effort = "none"
+temperature      = 0.0
+max_tokens       = 16000
+tools            = false
+max_tool_steps   = 24
+cost_per_call    = 0.05
+
+[agents.flash_tester]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-flash"
+reasoning_effort = "none"
+temperature      = 0.0
+max_tokens       = 24000
+tools            = false
+max_tool_steps   = 24
+cost_per_call    = 0.10
+response_format  = "json_object"
+
+[agents.v4pro_architect]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-v4-pro"
+reasoning_effort = "none"
+temperature      = 0.0
+max_tokens       = 16000
+tools            = false
+max_tool_steps   = 24
+cost_per_call    = 0.20
+
+[agents.v4pro_tester]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-v4-pro"
+reasoning_effort = "none"
+temperature      = 0.0
+max_tokens       = 24000
+tools            = false
+max_tool_steps   = 24
+cost_per_call    = 0.20
+response_format  = "json_object"
+
+[agents.flash_nothink]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-flash"
+reasoning_effort = "none"
+temperature      = 0.0
+max_tokens       = 8000
+tools            = true
+max_tool_steps   = 24
+cost_per_call    = 0.05
+require_write    = true
+
+[agents.flash_high]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-flash"
+reasoning_effort = "high"
+temperature      = 0.0
+max_tokens       = 8000
+tools            = true
+max_tool_steps   = 24
+cost_per_call    = 0.10
+
+[agents.v4pro_medium]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-v4-pro"
+reasoning_effort = "none"
+temperature      = 0.0
+max_tokens       = 16000
+tools            = true
+max_tool_steps   = 24
+cost_per_call    = 0.20
+
+[agents.v4pro_high]
+adapter          = "http"
+family           = "deepseek"
+model            = "deepseek-v4-pro"
+reasoning_effort = "high"
+temperature      = 0.0
+max_tokens       = 16000
+tools            = true
+max_tool_steps   = 24
+cost_per_call    = 0.30
+require_write    = true
+
+# Gate chain: cheapest first, stops at first failure. Edit for your target language.
+[[gates]]
+name = "lint"
+cmd  = "ruff check ."
+
+[[gates]]
+name = "types"
+cmd  = "pyright"
+
+[[gates]]
+name = "test"
+cmd  = "python3 -m pytest -q -x"
+
+[tests]
+tests_gate     = "test"
+framework_hint = "Use pytest."
+repro_cmd      = "python3 -m pytest -q {path}"
+repro_path     = "tests/critic/test_critic_r{round}_{n}.py"
+
+[critic]
+enabled    = true
+max_rounds = 2
+
+[guards]
+# fnmatch patterns the implementer may NOT touch (tests are the contract)
+protected = ["tests/*", "conftest.py", "pytest.ini", "tox.ini", "loopforge.toml"]
+
+[sandbox]
+docker_image = ""             # e.g. "python:3.12-slim": gates then run with --network none

@@ -1,0 +1,4 @@
+{
+  "include": ["conversational_agent"],
+  "exclude": ["**/__pycache__", "**/*.egg-info"]
+}
