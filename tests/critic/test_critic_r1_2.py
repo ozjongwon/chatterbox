@@ -6,7 +6,12 @@ import threading
 from typing import Any
 
 from conversational_agent.core.engine import ConversationEngine
-from conversational_agent.core.models import FrontendType, LLMAction, TurnRequest, TurnStatus
+from conversational_agent.core.models import (
+    FrontendType,
+    LLMAction,
+    TurnRequest,
+    TurnStatus,
+)
 from conversational_agent.storage import InMemoryConversationStore
 
 

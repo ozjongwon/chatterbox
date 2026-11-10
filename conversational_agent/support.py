@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from conversational_agent.core.models import LLMAction
+from conversational_agent.tools import ToolRegistry, ToolSpec
 
 
 class FakeOrderRepository:
@@ -258,12 +259,52 @@ class SupportScenarioLLM:
                 "선택 가능한 처리: 교환 또는 환불. "
                 f"정책 근거: {policy}"
             ),
+            claims=[
+                {
+                    "value": "damage_verified",
+                    "evidence_ids": ["policy-ata-1", "photo-1"],
+                }
+            ],
         )
 
 
-def support_tools(repository: FakeOrderRepository, guard: FakeAttachmentGuard) -> dict[str, Any]:
-    return {
-        "lookup_order": repository.lookup_order,
-        "lookup_order_item": repository.lookup_order_item,
-        "validate_attachment": guard.validate_attachment,
-    }
+def support_tools(repository: FakeOrderRepository, guard: FakeAttachmentGuard) -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(ToolSpec(
+        name="lookup_order",
+        description="Look up a customer-owned order.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "pattern": "^\\d{5}$"},
+                "customer_id": {"type": "string"},
+            },
+            "required": ["order_id", "customer_id"],
+        },
+        handler=repository.lookup_order,
+    ))
+    registry.register(ToolSpec(
+        name="lookup_order_item",
+        description="Verify an item belongs to an order.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "pattern": "^\\d{5}$"},
+                "item_id": {"type": "string"},
+                "customer_id": {"type": "string"},
+            },
+            "required": ["order_id", "item_id", "customer_id"],
+        },
+        handler=repository.lookup_order_item,
+    ))
+    registry.register(ToolSpec(
+        name="validate_attachment",
+        description="Validate an image attachment used as damage proof.",
+        input_schema={
+            "type": "object",
+            "properties": {"attachment_id": {"type": "string"}},
+            "required": ["attachment_id"],
+        },
+        handler=guard.validate_attachment,
+    ))
+    return registry

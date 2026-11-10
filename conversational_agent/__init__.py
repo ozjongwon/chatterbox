@@ -14,6 +14,11 @@ from conversational_agent.core.models import (
     ValidationError,
 )
 from conversational_agent.fakes import FakeRAGProvider, FakeTextLLM
+from conversational_agent.policy import (
+    ExecutionPolicy,
+    PolicyRegistry,
+    ResponseGuard,
+)
 from conversational_agent.providers import ProviderValidationError, RAGProvider
 from conversational_agent.storage import (
     FunctionConversationStore,
@@ -25,11 +30,13 @@ from conversational_agent.support import (
     SupportScenarioLLM,
     support_tools,
 )
+from conversational_agent.tools import ToolRegistry, ToolSpec, ToolValidationError
 from conversational_agent.workflow import WorkflowRegistry, WorkflowSelector
 
 __all__ = [
     'Conversation',
     'ConversationEngine',
+    'ExecutionPolicy',
     'FakeAttachmentGuard',
     'FakeOrderRepository',
     'FakeRAGProvider',
@@ -39,9 +46,14 @@ __all__ = [
     'InMemoryConversationStore',
     'LLMAction',
     'LRUCache',
+    'PolicyRegistry',
     'ProviderValidationError',
     'RAGProvider',
+    'ResponseGuard',
     'SupportScenarioLLM',
+    'ToolRegistry',
+    'ToolSpec',
+    'ToolValidationError',
     'Turn',
     'TurnRequest',
     'TurnStatus',

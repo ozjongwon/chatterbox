@@ -7,6 +7,7 @@ from conversational_agent import (
     FakeAttachmentGuard,
     FakeOrderRepository,
     FakeRAGProvider,
+    PolicyRegistry,
     SupportScenarioLLM,
     WorkflowRegistry,
     support_tools,
@@ -26,10 +27,13 @@ def test_realistic_damage_support_scenario() -> None:
         documents=[
             {
                 "evidence_id": "policy-ata-1",
+                "policy_id": "damaged_on_arrival",
                 "text": "Items damaged on arrival may be exchanged or refunded with photo evidence.",
             }
         ],
     )
+    policies = PolicyRegistry()
+    policies.load_directory(Path(__file__).resolve().parents[1] / "policies")
     llm = SupportScenarioLLM()
     workflows = WorkflowRegistry()
     workflows.load_directory(Path(__file__).resolve().parents[1] / "workflows")
@@ -38,6 +42,7 @@ def test_realistic_damage_support_scenario() -> None:
         llm=llm,
         tools=support_tools(repository, guard),
         workflows=workflows,
+        policies=policies,
         max_steps=6,
     )
     text = TextFrontend(engine)
@@ -83,6 +88,13 @@ def test_realistic_damage_support_scenario() -> None:
     assert any(event["type"] == "rag.call" for event in events3)
     assert "사진 증빙" in final_text(events3)
     assert "교환 또는 환불" in final_text(events3)
+    assert any(
+        event.get("type") == "response.guard" and event.get("allowed")
+        for event in events3
+    )
+    assert engine.get_conversation("support-1").metadata["execution_policy_id"] == (
+        "damaged_on_arrival"
+    )
 
     # 4) User chooses refund.
     events4 = list(text.send(

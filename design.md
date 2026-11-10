@@ -466,6 +466,9 @@ Workflow/Validator → tool과 최종 결정 통제
 - `conversational_agent/support.py`
 - `tests/test_support_scenario.py`
 - `examples/support_scenario_demo.py`
+- `conversational_agent/workflow.py`
+- `workflows/damaged_on_arrival.v3.json`
+- `workflows/order_status.v2.json`
 
 ## 15. 현재 구현 파일
 
@@ -477,9 +480,48 @@ conversational_agent/storage.py           ConversationStore, InMemory/Function s
 conversational_agent/cache.py             LRU conversation cache
 conversational_agent/fakes.py             FakeRAGProvider, FakeTextLLM
 conversational_agent/support.py           order DB, attachment guard, support LLM
+conversational_agent/workflow.py          workflow load/select/validate/pin
 conversational_agent/frontends/text.py    TextFrontend
 conversational_agent/frontends/voice.py   STT/TTS VoiceFrontend
 ```
+
+### 15.1 현재 구현 상태
+
+구현 완료:
+
+- JSON workflow definition loading
+- `WorkflowRegistry`
+- explicit `workflow_id` 선택
+- 첫 메시지 keyword 기반 workflow 선택
+- conversation 시작 시 workflow ID/version/initial state pinning
+- 선택된 workflow의 `allowed_tools` 검사
+- tool/RAG 결과를 `workflow_slots`에 반영
+- 단순 predicate 기반 state transition
+- workflow reload, explicit activate approval, rollback
+- subflow 선언 필드와 runtime handoff API
+- 공통 `ToolSpec`/`ToolRegistry`
+- tool input schema, precondition, postcondition 검증
+- `ExecutionPolicy`/`PolicyRegistry`
+- RAG 결과의 `policy_id`를 versioned execution policy에 자동 연결
+- `ResponseGuard`와 forbidden claim 검증
+- support 시나리오 5턴 E2E
+- text memory 10턴 + store reload E2E
+- FunctionConversationStore
+- generic `tool` action
+
+부분 구현:
+
+- tool별 owner/item/photo 검증은 support adapter에 구현됨
+- workflow state transition은 현재 `order_id_present`, `item_id_present`,
+  `photo_verified`, `policy_evidence_id_present` 수준
+- subflow는 선언 가능하지만 자동 실행 graph scheduler는 아직 없음
+- handoff는 API 수준으로 구현됐지만 자동 trigger 규칙은 단순함
+
+미구현:
+
+- workflow 관리자 UI와 다단계 approval workflow
+- 복잡한 JSON 조건식 DSL
+- 실제 STT/TTS/LLM/DB adapter
 
 ## 16. 직접 구현과 Framework 선택
 
@@ -491,13 +533,14 @@ conversational_agent/frontends/voice.py   STT/TTS VoiceFrontend
 - RAG, tool, memory, persistence, validation을 테스트로 확보했다.
 - framework를 빨리 도입하면 문제 원인이 framework와 자체 코드에 분산된다.
 
-다음 단계는 framework 도입보다 다음 구조를 완성하는 것이다.
+동적 workflow loading, 승인/rollback, policy guard의 1차 구현은 이미 완료됐다.
+다음 단계는 framework 도입보다
+현재 DSL과 검증 계층을 완성하는 것이다.
 
 ```text
-1. declarative WorkflowPolicy
-2. ToolSpec + common middleware
-3. ResponseGuard
-4. 실제 LLM/RAG/DB adapter
+1. workflow DSL 조건식/subflow/handoff 확장
+2. 실제 LLM/RAG/DB adapter
+3. workflow 관리자 UI와 운영 approval pipeline
 ```
 
 Framework 도입을 고려할 조건:
@@ -524,10 +567,9 @@ Framework 도입을 고려할 조건:
 
 ```text
 현재 ConversationEngine 유지
-+ declarative WorkflowPolicy
-+ ToolSpec/ToolRegistry
-+ pre/post validation middleware
-+ ResponseGuard
++ JSON 기반 workflow DSL과 registry (1차 구현)
++ ToolSpec/ToolRegistry + pre/post validation (구현)
++ ResponseGuard + versioned PolicyRegistry (구현)
 
 복잡도 증가 시 orchestration은 LangGraph 검토
 실제 결제/환불 side effect는 Temporal/DBOS 검토
@@ -545,17 +587,29 @@ pyright
 현재 검증:
 
 ```text
-pytest: 26 passed
+pytest: 34 passed
 ruff: All checks passed
 pyright: 0 errors
 ```
 
-추가 예정 테스트:
+현재 포함된 테스트:
 
 - 선언형 workflow state/slot 전이
-- tool pre/post condition 단위 테스트
-- forbidden claim response guard
-- RAG policy version 선택
+- workflow explicit/keyword selection과 version pinning
+- workflow reload/activate/rollback
+- subflow 선언과 workflow handoff
+- ToolSpec schema/pre/post validation
+- ResponseGuard forbidden claim 검증
+- RAG policy_id → versioned policy 연결
+- 10턴 conversation history와 store reload
+- function store 기반 conversation persistence
+- 선택된 RAG provider와 fake text chat E2E
+- 주문 DB, 상품 DB, 사진 증빙, RAG 정책을 결합한 5턴 support E2E
+
+추가 예정 테스트:
+
+- 복잡한 조건식/subflow scheduler
+- 다단계 관리자 approval workflow
 - human-in-the-loop escalation
 - 실제 LLM tool-calling 품질 평가
 - 실제 DB transaction/idempotency

@@ -39,6 +39,7 @@ class LLMAction:
     query: str | None = None
     tool_name: str | None = None
     arguments: dict[str, Any] | None = None
+    claims: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class LLMAction:
             'query': self.query,
             'tool_name': self.tool_name,
             'arguments': dict(self.arguments or {}),
+            'claims': list(self.claims or []),
         }
 
 

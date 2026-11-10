@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ class WorkflowDefinition:
     entry_keywords: tuple[str, ...]
     slots: dict[str, dict[str, Any]]
     states: dict[str, dict[str, Any]]
+    subflows: tuple[str, ...] = ()
 
     @property
     def initial_state(self) -> str:
@@ -46,6 +48,7 @@ class WorkflowDefinition:
             entry_keywords=tuple(str(x).lower() for x in data.get("entry_keywords", [])),
             slots=dict(data.get("slots") or {}),
             states=dict(states),
+            subflows=tuple(str(x) for x in data.get("subflows", [])),
         )
 
 
@@ -55,25 +58,76 @@ class WorkflowRegistry:
     def __init__(self, known_tools: set[str] | None = None) -> None:
         self._known_tools = known_tools
         self._workflows: dict[str, list[WorkflowDefinition]] = {}
+        self._active: dict[str, int] = {}
+        self._lock = threading.RLock()
 
     def register(self, workflow: WorkflowDefinition) -> None:
         self._validate(workflow)
-        self._workflows.setdefault(workflow.workflow_id, []).append(workflow)
-        self._workflows[workflow.workflow_id].sort(key=lambda item: item.version)
+        with self._lock:
+            self._workflows.setdefault(workflow.workflow_id, []).append(workflow)
+            self._workflows[workflow.workflow_id].sort(key=lambda item: item.version)
+            self._active[workflow.workflow_id] = max(
+                self._active.get(workflow.workflow_id, 0), workflow.version
+            )
 
     def load_directory(self, path: Path) -> None:
         for file in sorted(path.glob("*.json")):
             data = json.loads(file.read_text(encoding="utf-8"))
             self.register(WorkflowDefinition.from_dict(data))
 
+    def reload(self, path: Path, activate: bool = False) -> None:
+        candidate = WorkflowRegistry(self._known_tools)
+        candidate.load_directory(path)
+        with self._lock:
+            for workflow_id, versions in candidate._workflows.items():
+                merged = {
+                    item.version: item
+                    for item in self._workflows.get(workflow_id, [])
+                }
+                merged.update({item.version: item for item in versions})
+                self._workflows[workflow_id] = [
+                    merged[version] for version in sorted(merged)
+                ]
+            if activate:
+                self._active.update(candidate._active)
+            else:
+                for workflow_id in candidate._active:
+                    self._active.setdefault(
+                        workflow_id, candidate._active[workflow_id]
+                    )
+
+    def activate(self, workflow_id: str, version: int) -> None:
+        with self._lock:
+            if self.get(workflow_id, version) is None:
+                raise WorkflowError(
+                    f"cannot activate unknown workflow {workflow_id!r} v{version}"
+                )
+            self._active[workflow_id] = version
+
+    def rollback(self, workflow_id: str) -> int:
+        with self._lock:
+            versions = [item.version for item in self._workflows.get(workflow_id, [])]
+            current = self._active.get(workflow_id)
+            previous = [version for version in versions if current is None or version < current]
+            if not previous:
+                raise WorkflowError(f"no previous version for workflow {workflow_id!r}")
+            self._active[workflow_id] = previous[-1]
+            return previous[-1]
+
     def get(self, workflow_id: str, version: int | None = None) -> WorkflowDefinition | None:
         candidates = self._workflows.get(workflow_id) or []
         if version is not None:
             return next((item for item in candidates if item.version == version), None)
-        return candidates[-1] if candidates else None
+        active = self._active.get(workflow_id)
+        return next((item for item in candidates if item.version == active), None)
 
     def all(self) -> list[WorkflowDefinition]:
-        return [workflow for versions in self._workflows.values() for workflow in versions]
+        workflows: list[WorkflowDefinition] = []
+        for workflow_id in self._workflows:
+            workflow = self.get(workflow_id)
+            if workflow is not None:
+                workflows.append(workflow)
+        return workflows
 
     def _validate(self, workflow: WorkflowDefinition) -> None:
         for name, state in workflow.states.items():
@@ -136,6 +190,22 @@ class WorkflowSelector:
             "workflow_state": metadata.get("workflow_state"),
             "workflow_slots": dict(metadata.get("workflow_slots") or {}),
         }
+
+    @staticmethod
+    def handoff(
+        conversation: Any,
+        registry: WorkflowRegistry,
+        workflow_id: str,
+    ) -> WorkflowDefinition:
+        target = registry.get(workflow_id)
+        if target is None:
+            raise WorkflowError(f"unknown handoff workflow {workflow_id!r}")
+        previous = WorkflowSelector.workflow_context(conversation)
+        if previous.get("workflow_id"):
+            conversation.metadata.setdefault("workflow_history", []).append(previous)
+        WorkflowSelector.pin(conversation, target)
+        conversation.metadata["workflow_handoff_from"] = previous.get("workflow_id")
+        return target
 
 
 def validate_workflow_slots(workflow: WorkflowDefinition, slots: dict[str, Any]) -> list[str]:

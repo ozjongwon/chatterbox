@@ -1,0 +1,11 @@
+{
+  "id": "damaged_on_arrival",
+  "version": 3,
+  "required_slots": ["order_id", "item_id", "photo_verified", "policy_evidence_id"],
+  "forbidden_claims": {
+    "refund_completed": {"requires_slot": "refund_id"},
+    "refund_approved": {"requires_slot": "refund_eligible"},
+    "damage_verified": {"requires_slot": "photo_verified"}
+  },
+  "safe_fallback": "현재 요청을 처리하기 위한 확인이 더 필요합니다."
+}

@@ -20,8 +20,10 @@ from conversational_agent.core.models import (
     TurnStatus,
     ValidationError,
 )
+from conversational_agent.policy import PolicyRegistry, ResponseGuard
 from conversational_agent.providers import validate_providers
 from conversational_agent.storage import ConversationStore, InMemoryConversationStore
+from conversational_agent.tools import ToolRegistry, ToolSpec
 from conversational_agent.workflow import WorkflowRegistry, WorkflowSelector
 
 
@@ -102,11 +104,13 @@ class ConversationEngine:
         llm_first_token_timeout: float = 5.0,
         total_turn_timeout: float = 30.0,
         history_limit: int = 50,
-        tools: Mapping[str, Callable[..., Any]] | None = None,
+        tools: Mapping[str, Callable[..., Any]] | ToolRegistry | None = None,
         max_tool_calls: int = 4,
         tool_timeout: float = 2.0,
         workflows: WorkflowRegistry | None = None,
         workflow_selector: WorkflowSelector | None = None,
+        policies: PolicyRegistry | None = None,
+        response_guard: ResponseGuard | None = None,
     ) -> None:
         self._providers = validate_providers(providers)
         self._llm = llm
@@ -119,13 +123,15 @@ class ConversationEngine:
         self._llm_timeout = llm_first_token_timeout
         self._total_turn_timeout = total_turn_timeout
         self._history_limit = history_limit
-        self._tools = dict(tools or {})
+        self._tools = tools if isinstance(tools, ToolRegistry) else dict(tools or {})
         self._max_tool_calls = max(0, max_tool_calls)
         self._tool_timeout = tool_timeout
         self._workflows = workflows
         self._workflow_selector = workflow_selector or (
             WorkflowSelector(workflows) if workflows is not None else None
         )
+        self._policies = policies
+        self._response_guard = response_guard or ResponseGuard()
         # A plain (non-reentrant) lock may be released by a different thread
         # than the one that acquired it, which matters because callers may
         # drive the streaming generator from another thread.
@@ -359,6 +365,32 @@ class ConversationEngine:
 
                     if action.action == 'answer':
                         answer_text = action.text or ''
+                        policy = self._execution_policy(conversation)
+                        if policy is not None or action.claims:
+                            allowed, guard_error = self._response_guard.validate(
+                                policy,
+                                list(action.claims or []),
+                                dict(conversation.metadata.get('workflow_slots') or {}),
+                            )
+                            if not allowed:
+                                degraded = True
+                                answer_text = (
+                                    policy.safe_fallback
+                                    if policy is not None
+                                    else "현재 요청을 처리하기 위한 확인이 더 필요합니다."
+                                )
+                            trace.append({
+                                'type': 'response_guard',
+                                'allowed': allowed,
+                                'error': guard_error,
+                            })
+                            yield {
+                                'type': 'response.guard',
+                                'conversation_id': conversation_id,
+                                'turn_id': turn_id,
+                                'allowed': allowed,
+                                'error': guard_error,
+                            }
                         break
 
                     if action.action == 'tool':
@@ -516,7 +548,7 @@ class ConversationEngine:
                             'items': _evidence_payload(results),
                         }
                     )
-                    self._update_workflow_from_rag(conversation, ids)
+                    self._update_workflow_from_rag(conversation, ids, results)
                     self._advance_workflow(conversation)
                     yield {
                         'type': 'rag.call',
@@ -783,19 +815,29 @@ class ConversationEngine:
 
     def _call_tool(
         self,
-        tool: Callable[..., Any],
+        tool: Callable[..., Any] | ToolSpec,
         args: dict[str, Any],
         request: TurnRequest,
         call_index: int,
     ) -> dict[str, Any]:
+        context = {
+            'conversation_id': request.conversation_id,
+            'turn_id': f'{request.idempotency_key}:{call_index}',
+            'metadata': dict(request.metadata),
+            'frontend': request.frontend.value,
+        }
+        if isinstance(tool, ToolSpec):
+            return self._call_with_timeout(
+                tool.invoke,
+                self._tool_timeout,
+                args,
+                context,
+            )
         result = self._call_with_timeout(
             tool,
             self._tool_timeout,
             **args,
-            conversation_id=request.conversation_id,
-            turn_id=f'{request.idempotency_key}:{call_index}',
-            metadata=dict(request.metadata),
-            frontend=request.frontend.value,
+            **context,
         )
         return result if isinstance(result, dict) else {'ok': True, 'data': result}
 
@@ -871,11 +913,37 @@ class ConversationEngine:
         self,
         conversation: Conversation,
         evidence_ids: list[str],
+        results: list[Any] | None = None,
     ) -> None:
         if evidence_ids:
             slots = dict(conversation.metadata.get('workflow_slots') or {})
             slots['policy_evidence_id'] = evidence_ids[0]
+            slots['evidence_ids'] = list(evidence_ids)
             conversation.metadata['workflow_slots'] = slots
+        if self._policies is None:
+            return
+        for item in results or []:
+            if not isinstance(item, dict):
+                continue
+            policy_id = item.get('policy_id')
+            if not policy_id:
+                continue
+            policy = self._policies.get(str(policy_id))
+            if policy is not None:
+                conversation.metadata['execution_policy_id'] = policy.policy_id
+                conversation.metadata['execution_policy_version'] = policy.version
+                break
+
+    def _execution_policy(self, conversation: Conversation):
+        if self._policies is None:
+            return None
+        policy_id = conversation.metadata.get('execution_policy_id')
+        if not policy_id:
+            return None
+        return self._policies.get(
+            str(policy_id),
+            int(conversation.metadata.get('execution_policy_version') or 0) or None,
+        )
 
     def _advance_workflow(self, conversation: Conversation) -> None:
         if self._workflows is None:

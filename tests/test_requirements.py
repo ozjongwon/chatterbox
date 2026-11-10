@@ -16,7 +16,7 @@ from conversational_agent.core.models import (
 )
 from conversational_agent.frontends.text import TextFrontend
 from conversational_agent.frontends.voice import STTResult, VoiceFrontend
-from conversational_agent.providers import ProviderValidationError, RAGProvider
+from conversational_agent.providers import ProviderValidationError
 from conversational_agent.storage import InMemoryConversationStore
 
 
