@@ -137,6 +137,26 @@ LLM 호출 시 최근 `history_limit`개의 완료 turn이 전달된다. 기본�
 - cache에서 evict되는 conversation도 persist한다.
 - 새 engine이 같은 store를 사용하면 이전 conversation을 복원한다.
 
+### Client sequence ordering
+
+Text 메시지는 `client_seq`를 함께 전달할 수 있다.
+
+`ReorderingBuffer`는 conversation/session별로 기대 sequence를 추적한다.
+
+- 기대보다 큰 sequence는 pending buffer에 보관한다.
+- 기대 sequence가 도착하면 pending 항목까지 연속으로 release한다.
+- 누락 sequence가 `gap_timeout`을 넘으면 `sequence.gap` 이벤트를 생성한다.
+- 이벤트에는 `expected_seq`, `buffered_sequences`, `resend_from`이 포함된다.
+- client가 누락 sequence를 다시 보내면 buffered 요청들을 순서대로 실행한다.
+- 이미 처리된 sequence는 idempotency key와 sequence comparison으로 중복 제거한다.
+
+`OrderedTextFrontend.send`는 sequence-aware text ingress entry point이고,
+`OrderedTextFrontend.poll`은 gap timeout 알림 entry point다.
+
+음성에서는 packet-level jitter buffer와 transcript 이후 semantic turn ordering을
+분리해야 한다. 현재 구현은 semantic turn ordering이며 실제 RTP jitter buffer는
+transport layer에서 추가해야 한다.
+
 기본 store:
 
 ```python
@@ -587,7 +607,7 @@ pyright
 현재 검증:
 
 ```text
-pytest: 34 passed
+pytest: 37 passed
 ruff: All checks passed
 pyright: 0 errors
 ```
@@ -597,6 +617,7 @@ pyright: 0 errors
 - 선언형 workflow state/slot 전이
 - workflow explicit/keyword selection과 version pinning
 - workflow reload/activate/rollback
+- client sequence reordering, gap notification, resend 처리
 - subflow 선언과 workflow handoff
 - ToolSpec schema/pre/post validation
 - ResponseGuard forbidden claim 검증

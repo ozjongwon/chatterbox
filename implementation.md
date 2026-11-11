@@ -256,6 +256,30 @@ or punctuation boundaries and configurable minimum text length.
 Barge-in cancellation flows through `VoiceFrontend.cancel` and
 `ConversationEngine.cancel`.
 
+## 13.1 Ordered Ingress and Gap Recovery
+
+`ReorderingBuffer` handles client sequence ordering for text turns. Each conversation
+tracks the next expected client sequence. Messages with larger sequence numbers are held
+until the missing sequence arrives or the configured gap timeout expires.
+
+If a sequence is missing after the timeout, `ReorderingBuffer.expire` returns a
+`GapNotice`. The notice identifies the session, expected sequence, buffered sequences, and
+the sequence from which the client should resend.
+
+`OrderedTextFrontend.send` accepts `client_seq` and uses the reordering buffer before
+calling the normal `TextFrontend.send` path. When no contiguous request is ready, it emits
+a `sequence.gap` event if the timeout has elapsed. When the client resends the missing
+sequence, the buffer releases the missing request and every contiguous buffered request in
+order.
+
+Duplicate or already-delivered sequences are ignored. Invalid or non-positive sequences
+are rejected. This ordering layer is separate from the per-conversation execution lock:
+the lock prevents concurrent execution, while the reordering buffer controls the order in
+which requests are admitted.
+
+For voice, packet-level jitter buffering belongs in the audio transport layer. The current
+implementation provides semantic turn ordering after STT.
+
 ## 14. Fake Support Scenario
 
 The current local support scenario demonstrates a realistic damaged-on-arrival flow.
@@ -293,12 +317,12 @@ This trace is used by tests and can be exposed by a production observability lay
 ## 16. Current Tests and Validation
 
 The current suite covers text frontend operation, voice frontend operation, idempotency,
-cancellation, RAG provider validation, workflow loading and selection, workflow reload and
-rollback, workflow handoff, tool schema and postconditions, policy forbidden claims,
-ten-turn conversation memory, store reload, function-backed storage, and the realistic
-five-turn support scenario.
+cancellation, client sequence reordering and gap recovery, RAG provider validation,
+workflow loading and selection, workflow reload and rollback, workflow handoff, tool schema
+and postconditions, policy forbidden claims, ten-turn conversation memory, store reload,
+function-backed storage, and the realistic five-turn support scenario.
 
-Current verification status is thirty-four passing pytest tests, a clean Ruff check, and a
+Current verification status is thirty-seven passing pytest tests, a clean Ruff check, and a
 clean Pyright check.
 
 ## 17. Current Limitations

@@ -14,6 +14,7 @@ from conversational_agent.core.models import (
     ValidationError,
 )
 from conversational_agent.fakes import FakeRAGProvider, FakeTextLLM
+from conversational_agent.ordering import GapNotice, ReorderingBuffer
 from conversational_agent.policy import (
     ExecutionPolicy,
     PolicyRegistry,
@@ -43,12 +44,14 @@ __all__ = [
     'FakeTextLLM',
     'FrontendType',
     'FunctionConversationStore',
+    'GapNotice',
     'InMemoryConversationStore',
     'LLMAction',
     'LRUCache',
     'PolicyRegistry',
     'ProviderValidationError',
     'RAGProvider',
+    'ReorderingBuffer',
     'ResponseGuard',
     'SupportScenarioLLM',
     'ToolRegistry',
