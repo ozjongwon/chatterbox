@@ -598,7 +598,7 @@ Framework 도입을 고려할 조건:
 ## 17. 테스트
 
 ```bash
-cd /home/jc/Projects/chatterbox
+cd ~/Projects/chatterbox
 python3 -m pytest -q -x
 ruff check . --no-cache
 pyright

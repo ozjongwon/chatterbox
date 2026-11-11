@@ -53,7 +53,7 @@ whether an action is allowed; the model never directly executes a database opera
 ## Quick Start
 
 ```bash
-cd /home/jc/Projects/chatterbox
+cd ~/Projects/chatterbox
 PYTHONPATH="$PWD" python3 - <<'PY'
 from conversational_agent import ConversationEngine, FakeRAGProvider, FakeTextLLM
 from conversational_agent.frontends.text import TextFrontend
