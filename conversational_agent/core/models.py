@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, TypeAlias
 
 SCHEMA_VERSION = 1
 
@@ -29,28 +29,119 @@ class ValidationError(ValueError):
         self.code = code
 
 
-@dataclass
-class LLMAction:
-    """A single step decision produced by the LLM adapter."""
+class ActionType(str, Enum):
+    ANSWER = "answer"
+    RETRIEVE = "retrieve"
+    TOOL = "tool"
 
-    action: str
-    text: str | None = None
-    provider_id: str | None = None
-    query: str | None = None
-    tool_name: str | None = None
-    arguments: dict[str, Any] | None = None
-    claims: list[dict[str, Any]] | None = None
+
+@dataclass(frozen=True)
+class AnswerAction:
+    text: str
+    claims: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def action(self) -> ActionType:
+        return ActionType.ANSWER
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            'action': self.action,
-            'text': self.text,
-            'provider_id': self.provider_id,
-            'query': self.query,
-            'tool_name': self.tool_name,
-            'arguments': dict(self.arguments or {}),
-            'claims': list(self.claims or []),
+            "action": self.action.value,
+            "text": self.text,
+            "claims": [dict(item) for item in self.claims],
         }
+
+
+@dataclass(frozen=True)
+class RetrieveAction:
+    provider_id: str
+    query: str
+
+    @property
+    def action(self) -> ActionType:
+        return ActionType.RETRIEVE
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action.value,
+            "provider_id": self.provider_id,
+            "query": self.query,
+        }
+
+
+@dataclass(frozen=True)
+class ToolAction:
+    tool_name: str
+    arguments: dict[str, Any]
+
+    @property
+    def action(self) -> ActionType:
+        return ActionType.TOOL
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action.value,
+            "tool_name": self.tool_name,
+            "arguments": dict(self.arguments),
+        }
+
+
+LLMActionType: TypeAlias = AnswerAction | RetrieveAction | ToolAction
+
+
+def parse_llm_action(value: object) -> LLMActionType:
+    if isinstance(value, (AnswerAction, RetrieveAction, ToolAction)):
+        return value
+    if not isinstance(value, dict):
+        raise ValidationError("INVALID_LLM_ACTION", "LLM action must be an object")
+    kind = value.get("action")
+    if kind == ActionType.ANSWER or kind == ActionType.ANSWER.value:
+        text = value.get("text")
+        if not isinstance(text, str):
+            raise ValidationError("INVALID_LLM_ACTION", "answer.text must be a string")
+        claims = value.get("claims") or []
+        if not isinstance(claims, list):
+            raise ValidationError("INVALID_LLM_ACTION", "answer.claims must be a list")
+        return AnswerAction(text, tuple(dict(item) for item in claims))
+    if kind == ActionType.RETRIEVE or kind == ActionType.RETRIEVE.value:
+        provider_id = value.get("provider_id")
+        query = value.get("query")
+        if not isinstance(provider_id, str) or not isinstance(query, str):
+            raise ValidationError(
+                "INVALID_LLM_ACTION", "retrieve requires provider_id and query"
+            )
+        return RetrieveAction(provider_id, query)
+    if kind == ActionType.TOOL or kind == ActionType.TOOL.value:
+        tool_name = value.get("tool_name")
+        arguments = value.get("arguments")
+        if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+            raise ValidationError(
+                "INVALID_LLM_ACTION", "tool requires tool_name and arguments"
+            )
+        return ToolAction(tool_name, dict(arguments))
+    raise ValidationError("INVALID_LLM_ACTION", f"unknown action: {kind!r}")
+
+
+def LLMAction(
+    action: str,
+    text: str | None = None,
+    provider_id: str | None = None,
+    query: str | None = None,
+    tool_name: str | None = None,
+    arguments: dict[str, Any] | None = None,
+    claims: list[dict[str, Any]] | None = None,
+) -> LLMActionType:
+    """Compatibility factory that produces a typed action."""
+
+    return parse_llm_action({
+        "action": action,
+        "text": text,
+        "provider_id": provider_id,
+        "query": query,
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "claims": claims,
+    })
 
 
 @dataclass

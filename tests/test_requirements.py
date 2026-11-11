@@ -10,6 +10,7 @@ from conversational_agent.core.engine import ConversationEngine
 from conversational_agent.core.models import (
     FrontendType,
     LLMAction,
+    LLMActionType,
     TurnRequest,
     TurnStatus,
     ValidationError,
@@ -47,7 +48,7 @@ class MockRAGProvider:
 
 
 class ScriptedLLM:
-    def __init__(self, actions: list[LLMAction]) -> None:
+    def __init__(self, actions: list[LLMActionType]) -> None:
         self.actions = list(actions)
         self.calls: list[dict[str, Any]] = []
 
@@ -373,7 +374,7 @@ def test_req_2_invalid_input_handling(
     ],
 )
 def test_req_3_primary_success_path(
-    actions: list[LLMAction],
+    actions: list[LLMActionType],
     expected_provider_calls: list[str],
     expected_trace_types: list[str],
 ) -> None:

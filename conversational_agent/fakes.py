@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from conversational_agent.core.models import LLMAction
+from conversational_agent.core.models import LLMAction, LLMActionType
 
 
 class FakeRAGProvider:
@@ -53,7 +53,7 @@ class FakeTextLLM:
         self.default_provider_id = default_provider_id
         self.calls: list[dict[str, Any]] = []
 
-    def next_action(self, **kwargs: Any) -> LLMAction:
+    def next_action(self, **kwargs: Any) -> LLMActionType:
         self.calls.append(dict(kwargs))
         user_text = str(kwargs.get("user_text") or "")
         evidence = kwargs.get("evidence") or []

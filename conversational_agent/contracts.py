@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, TypeGuard
 
 if TYPE_CHECKING:
-    from conversational_agent.core.models import LLMAction
+    from conversational_agent.core.models import LLMActionType
 
 
 class LLMClient(Protocol):
-    def next_action(self, **kwargs: Any) -> LLMAction:
+    def next_action(self, **kwargs: Any) -> LLMActionType:
         ...
 
 

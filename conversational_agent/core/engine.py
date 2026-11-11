@@ -13,13 +13,17 @@ from typing import Any
 from conversational_agent.cache import LRUCache
 from conversational_agent.contracts import LLMClient, is_llm_client
 from conversational_agent.core.models import (
+    AnswerAction,
     Conversation,
     CoreEvent,
-    LLMAction,
+    LLMActionType,
+    RetrieveAction,
+    ToolAction,
     Turn,
     TurnRequest,
     TurnStatus,
     ValidationError,
+    parse_llm_action,
 )
 from conversational_agent.policy import PolicyRegistry, ResponseGuard
 from conversational_agent.providers import validate_providers
@@ -349,226 +353,240 @@ class ConversationEngine:
                         error_code = 'INVALID_LLM_ACTION'
                         break
 
-                    assert isinstance(action, LLMAction)
                     if not self._workflow_allows(conversation, action):
                         error_code = 'ACTION_NOT_ALLOWED'
                         break
                     trace.append(
                         {
                             'type': 'model_action',
-                            'action': action.action,
+                            'action': action.action.value,
                             'step': step,
                             'duration_ms': (time.perf_counter() - step_started) * 1000.0,
                         }
                     )
-                    yield {
+                    action_event: dict[str, Any] = {
                         'type': 'llm.action',
                         'conversation_id': conversation_id,
                         'turn_id': turn_id,
-                        'action': action.action,
-                        'provider_id': action.provider_id,
-                        'query': action.query,
-                        'tool_name': action.tool_name,
-                        'arguments': dict(action.arguments or {}),
+                        'action': action.action.value,
                     }
+                    match action:
+                        case AnswerAction():
+                            action_event['claims'] = [dict(item) for item in action.claims]
+                        case RetrieveAction():
+                            action_event['provider_id'] = action.provider_id
+                            action_event['query'] = action.query
+                        case ToolAction():
+                            action_event['tool_name'] = action.tool_name
+                            action_event['arguments'] = dict(action.arguments)
+                        case _:
+                            raise AssertionError(f'unhandled action: {action!r}')
+                    yield action_event
 
-                    if action.action == 'answer':
-                        answer_text = action.text or ''
-                        policy = self._execution_policy(conversation)
-                        if policy is not None or action.claims:
-                            allowed, guard_error = self._response_guard.validate(
-                                policy,
-                                list(action.claims or []),
-                                dict(conversation.metadata.get('workflow_slots') or {}),
-                            )
-                            if not allowed:
-                                degraded = True
-                                answer_text = (
-                                    policy.safe_fallback
-                                    if policy is not None
-                                    else "현재 요청을 처리하기 위한 확인이 더 필요합니다."
+                    match action:
+                        case AnswerAction():
+                            answer_text = action.text
+                            policy = self._execution_policy(conversation)
+                            if policy is not None or action.claims:
+                                allowed, guard_error = self._response_guard.validate(
+                                    policy,
+                                    list(action.claims),
+                                    dict(conversation.metadata.get('workflow_slots') or {}),
                                 )
-                            trace.append({
-                                'type': 'response_guard',
-                                'allowed': allowed,
-                                'error': guard_error,
-                            })
-                            yield {
-                                'type': 'response.guard',
-                                'conversation_id': conversation_id,
-                                'turn_id': turn_id,
-                                'allowed': allowed,
-                                'error': guard_error,
-                            }
-                        break
-
-                    if action.action == 'tool':
-                        if tool_calls >= self._max_tool_calls:
-                            error_code = 'MAX_TOOL_CALLS_EXCEEDED'
+                                if not allowed:
+                                    degraded = True
+                                    answer_text = (
+                                        policy.safe_fallback
+                                        if policy is not None
+                                        else "현재 요청을 처리하기 위한 확인이 더 필요합니다."
+                                    )
+                                trace.append({
+                                    'type': 'response_guard',
+                                    'allowed': allowed,
+                                    'error': guard_error,
+                                })
+                                yield {
+                                    'type': 'response.guard',
+                                    'conversation_id': conversation_id,
+                                    'turn_id': turn_id,
+                                    'allowed': allowed,
+                                    'error': guard_error,
+                                }
                             break
-                        tool_name = action.tool_name or ''
-                        tool = self._tools.get(tool_name)
-                        tool_started = time.perf_counter()
-                        if tool is None:
-                            result: dict[str, Any] = {
-                                'ok': False,
-                                'error_code': 'UNKNOWN_TOOL',
-                                'message': f'Unknown tool: {tool_name}',
-                            }
-                        else:
-                            try:
-                                result = self._call_tool(
-                                    tool,
-                                    dict(action.arguments or {}),
-                                    request,
-                                    tool_calls,
-                                )
-                            except _CancelledError:
-                                cancelled = True
+
+                        case ToolAction():
+                            if tool_calls >= self._max_tool_calls:
+                                error_code = 'MAX_TOOL_CALLS_EXCEEDED'
                                 break
-                            except Exception:  # noqa: BLE001 - tool boundary
-                                degraded = True
+                            tool_name = action.tool_name
+                            tool = self._tools.get(tool_name)
+                            tool_started = time.perf_counter()
+                            if tool is None:
+                                result: dict[str, Any] = {
+                                    'ok': False,
+                                    'error_code': 'UNKNOWN_TOOL',
+                                    'message': f'Unknown tool: {tool_name}',
+                                }
+                            else:
+                                try:
+                                    result = self._call_tool(
+                                        tool,
+                                        dict(action.arguments),
+                                        request,
+                                        tool_calls,
+                                    )
+                                except _CancelledError:
+                                    cancelled = True
+                                    break
+                                except Exception:  # noqa: BLE001 - tool boundary
+                                    degraded = True
+                                    result = {
+                                        'ok': False,
+                                        'error_code': 'TOOL_FAILURE',
+                                        'message': _SAFE_ERROR_MESSAGES['TOOL_FAILURE'],
+                                    }
+                            if not isinstance(result, dict):
                                 result = {
                                     'ok': False,
                                     'error_code': 'TOOL_FAILURE',
                                     'message': _SAFE_ERROR_MESSAGES['TOOL_FAILURE'],
                                 }
-                        if not isinstance(result, dict):
-                            result = {'ok': False, 'error_code': 'TOOL_FAILURE',
-                                      'message': _SAFE_ERROR_MESSAGES['TOOL_FAILURE']}
-                        tool_calls += 1
-                        tool_results.append({'tool_name': tool_name, **result})
-                        trace.append({
-                            'type': 'tool_call',
-                            'tool_name': tool_name,
-                            'arguments': dict(action.arguments or {}),
-                            'result': result,
-                            'duration_ms': (time.perf_counter() - tool_started) * 1000.0,
-                            'status': 'ok' if result.get('ok') else 'error',
-                        })
-                        yield {
-                            'type': 'tool.call',
-                            'conversation_id': conversation_id,
-                            'turn_id': turn_id,
-                            'tool_name': tool_name,
-                            'arguments': dict(action.arguments or {}),
-                            'result': result,
-                        }
-                        if not result.get('ok'):
-                            degraded = True
-                        else:
-                            self._update_workflow_from_tool(
-                                conversation, tool_name, result
-                            )
-                            self._advance_workflow(conversation)
-                        continue
-
-                    if rag_calls >= self._max_rag_calls:
-                        error_code = 'MAX_RAG_CALLS_EXCEEDED'
-                        break
-
-                    provider = self._providers.get(action.provider_id or '')
-                    rag_started = time.perf_counter()
-                    if provider is None:
-                        degraded = True
-                        trace.append(
-                            {
-                                'type': 'rag_call',
-                                'provider_id': action.provider_id,
-                                'query': action.query,
-                                'evidence_ids': [],
-                                'duration_ms': (time.perf_counter() - rag_started) * 1000.0,
-                                'status': 'error',
-                                'error_code': 'UNKNOWN_PROVIDER',
-                                'degraded': True,
+                            tool_calls += 1
+                            tool_results.append({'tool_name': tool_name, **result})
+                            trace.append({
+                                'type': 'tool_call',
+                                'tool_name': tool_name,
+                                'arguments': dict(action.arguments),
+                                'result': result,
+                                'duration_ms': (time.perf_counter() - tool_started) * 1000.0,
+                                'status': 'ok' if result.get('ok') else 'error',
+                            })
+                            yield {
+                                'type': 'tool.call',
+                                'conversation_id': conversation_id,
+                                'turn_id': turn_id,
+                                'tool_name': tool_name,
+                                'arguments': dict(action.arguments),
+                                'result': result,
                             }
-                        )
-                        yield {
-                            'type': 'rag.call',
-                            'conversation_id': conversation_id,
-                            'turn_id': turn_id,
-                            'provider_id': action.provider_id,
-                            'query': action.query,
-                            'evidence_ids': [],
-                            'degraded': True,
-                        }
-                        rag_calls += 1
-                        continue
+                            if not result.get('ok'):
+                                degraded = True
+                            else:
+                                self._update_workflow_from_tool(
+                                    conversation, tool_name, result
+                                )
+                                self._advance_workflow(conversation)
+                            continue
 
-                    try:
-                        results = self._retrieve(
-                            provider, action.query or '', conversation_id, turn_id
-                        )
-                    except _CancelledError:
-                        cancelled = True
-                        break
-                    except Exception:  # noqa: BLE001 - degraded turn boundary
-                        degraded = True
-                        trace.append(
-                            {
-                                'type': 'rag_call',
+                        case RetrieveAction():
+                            if rag_calls >= self._max_rag_calls:
+                                error_code = 'MAX_RAG_CALLS_EXCEEDED'
+                                break
+                            provider = self._providers.get(action.provider_id)
+                            rag_started = time.perf_counter()
+                            if provider is None:
+                                degraded = True
+                                trace.append(
+                                    {
+                                        'type': 'rag_call',
+                                        'provider_id': action.provider_id,
+                                        'query': action.query,
+                                        'evidence_ids': [],
+                                        'duration_ms': (time.perf_counter() - rag_started) * 1000.0,
+                                        'status': 'error',
+                                        'error_code': 'UNKNOWN_PROVIDER',
+                                        'degraded': True,
+                                    }
+                                )
+                                yield {
+                                    'type': 'rag.call',
+                                    'conversation_id': conversation_id,
+                                    'turn_id': turn_id,
+                                    'provider_id': action.provider_id,
+                                    'query': action.query,
+                                    'evidence_ids': [],
+                                    'degraded': True,
+                                }
+                                rag_calls += 1
+                                continue
+
+                            try:
+                                results = self._retrieve(
+                                    provider, action.query, conversation_id, turn_id
+                                )
+                            except _CancelledError:
+                                cancelled = True
+                                break
+                            except Exception:  # noqa: BLE001 - degraded turn boundary
+                                degraded = True
+                                trace.append(
+                                    {
+                                        'type': 'rag_call',
+                                        'provider_id': provider.provider_id,
+                                        'query': action.query,
+                                        'evidence_ids': [],
+                                        'duration_ms': (time.perf_counter() - rag_started) * 1000.0,
+                                        'status': 'degraded',
+                                        'error_code': 'RAG_FAILURE',
+                                        'degraded': True,
+                                    }
+                                )
+                                yield {
+                                    'type': 'rag.call',
+                                    'conversation_id': conversation_id,
+                                    'turn_id': turn_id,
+                                    'provider_id': provider.provider_id,
+                                    'query': action.query,
+                                    'evidence_ids': [],
+                                    'degraded': True,
+                                }
+                                rag_calls += 1
+                                if time.perf_counter() >= deadline:
+                                    error_code = 'TURN_TIMEOUT'
+                                    break
+                                continue
+
+                            if time.perf_counter() >= deadline:
+                                error_code = 'TURN_TIMEOUT'
+                                break
+
+                            ids = _evidence_ids(results)
+                            if not ids:
+                                degraded = True
+                            trace.append(
+                                {
+                                    'type': 'rag_call',
+                                    'provider_id': provider.provider_id,
+                                    'query': action.query,
+                                    'evidence_ids': ids,
+                                    'duration_ms': (time.perf_counter() - rag_started) * 1000.0,
+                                    'status': 'ok',
+                                    'degraded': not ids,
+                                }
+                            )
+                            evidence.append(
+                                {
+                                    'provider_id': provider.provider_id,
+                                    'query': action.query,
+                                    'evidence_ids': ids,
+                                    'items': _evidence_payload(results),
+                                }
+                            )
+                            self._update_workflow_from_rag(conversation, ids, results)
+                            self._advance_workflow(conversation)
+                            yield {
+                                'type': 'rag.call',
+                                'conversation_id': conversation_id,
+                                'turn_id': turn_id,
                                 'provider_id': provider.provider_id,
                                 'query': action.query,
-                                'evidence_ids': [],
-                                'duration_ms': (time.perf_counter() - rag_started) * 1000.0,
-                                'status': 'degraded',
-                                'error_code': 'RAG_FAILURE',
-                                'degraded': True,
+                                'evidence_ids': ids,
+                                'degraded': not ids,
                             }
-                        )
-                        yield {
-                            'type': 'rag.call',
-                            'conversation_id': conversation_id,
-                            'turn_id': turn_id,
-                            'provider_id': provider.provider_id,
-                            'query': action.query,
-                            'evidence_ids': [],
-                            'degraded': True,
-                        }
-                        rag_calls += 1
-                        if time.perf_counter() >= deadline:
-                            error_code = 'TURN_TIMEOUT'
-                            break
-                        continue
+                            rag_calls += 1
 
-                    if time.perf_counter() >= deadline:
-                        error_code = 'TURN_TIMEOUT'
-                        break
-
-                    ids = _evidence_ids(results)
-                    if not ids:
-                        degraded = True
-                    trace.append(
-                        {
-                            'type': 'rag_call',
-                            'provider_id': provider.provider_id,
-                            'query': action.query,
-                            'evidence_ids': ids,
-                            'duration_ms': (time.perf_counter() - rag_started) * 1000.0,
-                            'status': 'ok',
-                            'degraded': not ids,
-                        }
-                    )
-                    evidence.append(
-                        {
-                            'provider_id': provider.provider_id,
-                            'query': action.query,
-                            'evidence_ids': ids,
-                            'items': _evidence_payload(results),
-                        }
-                    )
-                    self._update_workflow_from_rag(conversation, ids, results)
-                    self._advance_workflow(conversation)
-                    yield {
-                        'type': 'rag.call',
-                        'conversation_id': conversation_id,
-                        'turn_id': turn_id,
-                        'provider_id': provider.provider_id,
-                        'query': action.query,
-                        'evidence_ids': ids,
-                        'degraded': not ids,
-                    }
-                    rag_calls += 1
+                        case _:
+                            raise AssertionError(f'unhandled action: {action!r}')
 
                 if not cancelled and error_code is None and answer_text is None:
                     error_code = (
@@ -790,7 +808,11 @@ class ConversationEngine:
             if self._is_cancelled(request.conversation_id, turn_id):
                 # Cancellation arrived while the model call was in flight.
                 raise _CancelledError()
-            return result
+            try:
+                return parse_llm_action(result) if isinstance(result, dict) else result
+            except ValidationError as exc:
+                last_error = exc
+                continue
         raise _LLMFailure('llm failed') from last_error
 
     def _retrieve(
@@ -866,17 +888,15 @@ class ConversationEngine:
 
     @staticmethod
     def _is_valid_action(action: Any) -> bool:
-        if not isinstance(action, LLMAction):
-            return False
-        if action.action == 'answer':
-            return True
-        if action.action == 'retrieve':
-            return bool(action.provider_id) and bool(
-                action.query and action.query.strip()
-            )
-        if action.action == 'tool':
-            return bool(action.tool_name) and isinstance(action.arguments, dict)
-        return False
+        match action:
+            case AnswerAction():
+                return bool(action.text)
+            case RetrieveAction():
+                return bool(action.provider_id) and bool(action.query.strip())
+            case ToolAction():
+                return bool(action.tool_name) and isinstance(action.arguments, dict)
+            case _:
+                return False
 
     def _is_cancelled(self, conversation_id: str, turn_id: str) -> bool:
         with self._cancelled_guard:
@@ -885,8 +905,8 @@ class ConversationEngine:
                 or (conversation_id, '*') in self._cancelled
             )
 
-    def _workflow_allows(self, conversation: Conversation, action: LLMAction) -> bool:
-        if self._workflows is None or action.action == 'answer':
+    def _workflow_allows(self, conversation: Conversation, action: LLMActionType) -> bool:
+        if self._workflows is None:
             return True
         workflow = self._workflows.get(
             str(conversation.metadata.get('workflow_id') or ''),
@@ -897,11 +917,15 @@ class ConversationEngine:
         state_name = str(conversation.metadata.get('workflow_state') or '')
         state = workflow.states.get(state_name) or {}
         allowed = set(state.get('allowed_tools') or [])
-        if action.action == 'tool':
-            return action.tool_name in allowed
-        if action.action == 'retrieve':
-            return 'retrieve_policy' in allowed
-        return False
+        match action:
+            case AnswerAction():
+                return True
+            case ToolAction():
+                return action.tool_name in allowed
+            case RetrieveAction():
+                return 'retrieve_policy' in allowed
+            case _:
+                return False
 
     def _update_workflow_from_tool(
         self,

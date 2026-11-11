@@ -56,7 +56,10 @@ conversation from the LRU cache or storage, handles idempotent turn replay, sele
 a workflow when necessary, and runs the bounded action loop.
 
 The action loop repeatedly calls `ConversationEngine._call_llm`. The current LLM adapter
-returns an `LLMAction` with one of three action types: retrieve, tool, or answer.
+returns one of three typed actions: `RetrieveAction`, `ToolAction`, or `AnswerAction`.
+Raw dictionary actions are parsed and validated through `parse_llm_action`, while the
+compatibility `LLMAction` factory creates the same typed action objects for existing
+adapters.
 
 Retrieve actions call `ConversationEngine._retrieve`. Tool actions call
 `ConversationEngine._call_tool`. Answer actions pass through `ResponseGuard.validate`
@@ -322,7 +325,7 @@ workflow loading and selection, workflow reload and rollback, workflow handoff, 
 and postconditions, policy forbidden claims, ten-turn conversation memory, store reload,
 function-backed storage, and the realistic five-turn support scenario.
 
-Current verification status is thirty-seven passing pytest tests, a clean Ruff check, and a
+Current verification status is forty-two passing pytest tests, a clean Ruff check, and a
 clean Pyright check.
 
 ## 17. Current Limitations

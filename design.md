@@ -186,30 +186,30 @@ FunctionConversationStore(
 
 ## 7. LLM Action
 
-LLM은 자연어를 직접 실행하지 않고 명시적 action을 제안한다.
+LLM은 자연어를 직접 실행하지 않고 명시적 typed action을 제안한다.
 
 ```python
-LLMAction(
-    action="retrieve",
+RetrieveAction(
     provider_id="product-policy",
     query="damaged on arrival refund policy",
 )
 ```
 
 ```python
-LLMAction(
-    action="tool",
+ToolAction(
     tool_name="lookup_order",
     arguments={"order_id": "12345", "customer_id": "customer-1"},
 )
 ```
 
 ```python
-LLMAction(
-    action="answer",
+AnswerAction(
     text="세 상품 중 어떤 상품이 파손됐나요?",
 )
 ```
+
+내부 Engine은 action class 타입으로 분기하며, 기존 adapter 호환을 위해 `LLMAction` factory를
+제공한다. 외부 LLM JSON은 `parse_llm_action`이 검증 후 typed action으로 변환한다.
 
 지원 action:
 
@@ -607,7 +607,7 @@ pyright
 현재 검증:
 
 ```text
-pytest: 37 passed
+pytest: 42 passed
 ruff: All checks passed
 pyright: 0 errors
 ```

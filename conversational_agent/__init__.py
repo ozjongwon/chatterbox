@@ -6,9 +6,14 @@ from conversational_agent.cache import LRUCache
 from conversational_agent.contracts import LLMClient, is_llm_client
 from conversational_agent.core.engine import ConversationEngine
 from conversational_agent.core.models import (
+    ActionType,
+    AnswerAction,
     Conversation,
     FrontendType,
     LLMAction,
+    LLMActionType,
+    RetrieveAction,
+    ToolAction,
     Turn,
     TurnRequest,
     TurnStatus,
@@ -41,6 +46,8 @@ from conversational_agent.tools import ToolRegistry, ToolSpec, ToolValidationErr
 from conversational_agent.workflow import WorkflowRegistry, WorkflowSelector
 
 __all__ = [
+    'ActionType',
+    'AnswerAction',
     'Conversation',
     'ConversationEngine',
     'ExecutionPolicy',
@@ -53,6 +60,7 @@ __all__ = [
     'GapNotice',
     'InMemoryConversationStore',
     'LLMAction',
+    'LLMActionType',
     'LLMClient',
     'LRUCache',
     'PolicyRegistry',
@@ -60,7 +68,9 @@ __all__ = [
     'RAGProvider',
     'ReorderingBuffer',
     'ResponseGuard',
+    'RetrieveAction',
     'SupportScenarioLLM',
+    'ToolAction',
     'ToolRegistry',
     'ToolSpec',
     'ToolValidationError',

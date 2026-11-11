@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from conversational_agent.core.models import LLMAction
+from conversational_agent.core.models import LLMAction, LLMActionType
 from conversational_agent.tools import ToolRegistry, ToolSpec
 
 
@@ -112,7 +112,7 @@ class SupportScenarioLLM:
         self.provider_id = provider_id
         self.calls: list[dict[str, Any]] = []
 
-    def next_action(self, **kwargs: Any) -> LLMAction:
+    def next_action(self, **kwargs: Any) -> LLMActionType:
         self.calls.append(dict(kwargs))
         text = str(kwargs.get("user_text") or "")
         history = kwargs.get("history") or []
