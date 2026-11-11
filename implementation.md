@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document describes the current chatbox implementation from the top down. It explains
+This document describes the current chatterbox implementation from the top down. It explains
 the runtime architecture, primary entry points, conversation lifecycle, workflow selection,
 RAG and database tools, policy validation, memory, persistence, and voice integration.
 

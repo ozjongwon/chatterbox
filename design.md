@@ -2,7 +2,7 @@
 
 작성 시점: 2026-11-10
 
-이 문서는 현재 chatbox 구현과 이후 실제 고객지원 서비스로 확장하기 위한 설계 결정을
+이 문서는 현재 chatterbox 구현과 이후 실제 고객지원 서비스로 확장하기 위한 설계 결정을
 정리한다.
 
 ## 1. 목표
@@ -598,7 +598,7 @@ Framework 도입을 고려할 조건:
 ## 17. 테스트
 
 ```bash
-cd /home/jc/Projects/chatbox
+cd /home/jc/Projects/chatterbox
 python3 -m pytest -q -x
 ruff check . --no-cache
 pyright
