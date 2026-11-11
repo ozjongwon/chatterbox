@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from conversational_agent.cache import LRUCache
+from conversational_agent.contracts import LLMClient, is_llm_client
 from conversational_agent.core.models import (
     Conversation,
     CoreEvent,
@@ -22,7 +23,11 @@ from conversational_agent.core.models import (
 )
 from conversational_agent.policy import PolicyRegistry, ResponseGuard
 from conversational_agent.providers import validate_providers
-from conversational_agent.storage import ConversationStore, InMemoryConversationStore
+from conversational_agent.storage import (
+    ConversationStore,
+    InMemoryConversationStore,
+    is_conversation_store,
+)
 from conversational_agent.tools import ToolRegistry, ToolSpec
 from conversational_agent.workflow import WorkflowRegistry, WorkflowSelector
 
@@ -94,9 +99,9 @@ class ConversationEngine:
 
     def __init__(
         self,
-        providers: list[Any] | tuple[Any, ...],
-        llm: Any,
-        store: ConversationStore | None = None,
+        providers: list[object] | tuple[object, ...],
+        llm: object,
+        store: object | None = None,
         cache_capacity: int = 100,
         max_steps: int = 4,
         max_rag_calls: int = 4,
@@ -112,8 +117,12 @@ class ConversationEngine:
         policies: PolicyRegistry | None = None,
         response_guard: ResponseGuard | None = None,
     ) -> None:
+        if not is_llm_client(llm):
+            raise TypeError("llm must expose a callable next_action method")
+        if store is not None and not is_conversation_store(store):
+            raise TypeError("store must expose callable save and load methods")
         self._providers = validate_providers(providers)
-        self._llm = llm
+        self._llm: LLMClient = llm
         self._store: ConversationStore = store or InMemoryConversationStore()
         self._cache: LRUCache[str, Conversation] = LRUCache(capacity=cache_capacity)
         self._cache_lock = threading.RLock()

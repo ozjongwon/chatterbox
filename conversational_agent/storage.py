@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import threading
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 
 class ConversationStore(Protocol):
@@ -16,6 +16,12 @@ class ConversationStore(Protocol):
 
     def load(self, conversation_id: str) -> dict[str, Any] | None:
         ...
+
+
+def is_conversation_store(value: object) -> TypeGuard[ConversationStore]:
+    return callable(getattr(value, "save", None)) and callable(
+        getattr(value, "load", None)
+    )
 
 
 class InMemoryConversationStore:
